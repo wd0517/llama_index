@@ -2,9 +2,7 @@
 from typing import Tuple, Any, List, Optional, Dict
 from collections import defaultdict
 from sqlalchemy import (
-    Engine,
     create_engine,
-    exc,
     Column,
     Integer,
     String,
@@ -22,6 +20,7 @@ from sqlalchemy.orm import (
 )
 
 from llama_index.core.graph_stores.types import GraphStore
+from llama_index.graph_stores.tidb.utils import check_db_availability, get_or_create
 
 
 rel_depth_query = sql.text(
@@ -77,6 +76,7 @@ class TiDBGraphStore(GraphStore):
     def init_schema(
         self, entity_table_name: str, relationship_table_name: str
     ) -> Tuple:
+        """Initialize schema."""
         Base = declarative_base()
 
         class EntityModel(Base):
@@ -116,6 +116,7 @@ class TiDBGraphStore(GraphStore):
 
     @property
     def get_client(self) -> Any:
+        """Get client."""
         return self._engine
 
     def upsert_triplet(self, subj: str, rel: str, obj: str) -> None:
@@ -133,6 +134,7 @@ class TiDBGraphStore(GraphStore):
 
     def get(self, subj: str) -> List[List[str]]:
         """Get triplets."""
+        print("calling get", subj)
         with Session(self._engine) as session:
             rels = (
                 session.query(self._rel_model)
@@ -149,6 +151,7 @@ class TiDBGraphStore(GraphStore):
         self, subjs: Optional[List[str]] = None, depth: int = 2, limit: int = 30
     ) -> Dict[str, List[List[str]]]:
         """Get depth-aware rel map."""
+        print("calling get_rel_map", subjs, depth, limit)
         rel_map: Dict[str, List[List[str]]] = defaultdict(list)
         with Session(self._engine) as session:
             # `raw_rels`` is a list of tuples (depth, subject, description, object), ordered by depth
@@ -223,39 +226,3 @@ class TiDBGraphStore(GraphStore):
         """Query the graph store with statement and parameters."""
         with Session(self._engine) as session:
             return session.execute(query, param_map).fetchall()
-
-
-def check_db_availability(engine: Engine) -> None:
-    try:
-        with engine.connect() as conn:
-            # conn.execute(sql.text("""SELECT Vec_Dims("[1]");"""))
-            conn.execute(sql.text("""SELECT 1;"""))
-    except exc.DatabaseError as e:
-        db_error_code = e.orig.args[0]
-        if db_error_code == 1045:
-            raise ValueError(
-                "Could not connect to the TiDB server. "
-                "Please check if the connection string is correct."
-            ) from e
-        # elif db_error_code == 1305:
-        #     raise ValueError(
-        #         "Please confirm if your TiDB supports vector search. "
-        #         "You can check this by running the query `SELECT Vec_Dims('[1]')` in TiDB."
-        #     ) from e
-        else:
-            raise ValueError(
-                "An error occurred while checking the database availability."
-            ) from e
-
-
-def get_or_create(session, model, defaults=None, **kwargs):
-    instance = session.query(model).filter_by(**kwargs).first()
-    if instance:
-        return instance, False
-    else:
-        if defaults:
-            kwargs.update(defaults)
-        instance = model(**kwargs)
-        session.add(instance)
-        session.commit()
-        return instance, True
