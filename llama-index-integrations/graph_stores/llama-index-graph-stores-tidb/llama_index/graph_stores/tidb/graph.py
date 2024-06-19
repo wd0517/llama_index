@@ -23,36 +23,34 @@ from llama_index.core.graph_stores.types import GraphStore
 from llama_index.graph_stores.tidb.utils import check_db_availability, get_or_create
 
 
-rel_depth_query = sql.text(
-    """
+rel_depth_query = """
 WITH RECURSIVE PATH AS
   (SELECT 1 AS depth,
           r.subject_id,
           r.object_id,
           r.description
-   FROM relationships r
+   FROM {relation_table} r
    WHERE r.subject_id IN
        (SELECT id
-        FROM entities
+        FROM {entity_table}
         WHERE name IN :subjs )
    UNION ALL SELECT p.depth + 1,
                     r.subject_id,
                     r.object_id,
                     r.description
    FROM PATH p
-   JOIN relationships r ON p.object_id = r.subject_id
+   JOIN {relation_table} r ON p.object_id = r.subject_id
    WHERE p.depth < :depth )
 SELECT p.depth,
        e1.name AS subject,
        p.description,
        e2.name AS object
 FROM PATH p
-JOIN entities e1 ON p.subject_id = e1.id
-JOIN entities e2 ON p.object_id = e2.id
+JOIN {entity_table} e1 ON p.subject_id = e1.id
+JOIN {entity_table} e2 ON p.object_id = e2.id
 ORDER BY p.depth
 LIMIT :limit;
 """
-)
 
 
 class TiDBGraphStore(GraphStore):
@@ -134,7 +132,6 @@ class TiDBGraphStore(GraphStore):
 
     def get(self, subj: str) -> List[List[str]]:
         """Get triplets."""
-        print("calling get", subj)
         with Session(self._engine) as session:
             rels = (
                 session.query(self._rel_model)
@@ -151,7 +148,6 @@ class TiDBGraphStore(GraphStore):
         self, subjs: Optional[List[str]] = None, depth: int = 2, limit: int = 30
     ) -> Dict[str, List[List[str]]]:
         """Get depth-aware rel map."""
-        print("calling get_rel_map", subjs, depth, limit)
         rel_map: Dict[str, List[List[str]]] = defaultdict(list)
         with Session(self._engine) as session:
             # `raw_rels`` is a list of tuples (depth, subject, description, object), ordered by depth
@@ -165,7 +161,12 @@ class TiDBGraphStore(GraphStore):
             # |     2 | Paul graham      | Coded            | Bel              |
             # +-------+------------------+------------------+------------------+
             raw_rels = session.execute(
-                rel_depth_query,
+                sql.text(
+                    rel_depth_query.format(
+                        relation_table=self._relationship_table_name,
+                        entity_table=self._entity_table_name,
+                    )
+                ),
                 {
                     "subjs": subjs,
                     "depth": depth,
@@ -196,7 +197,6 @@ class TiDBGraphStore(GraphStore):
             result = session.execute(stmt)
             session.commit()
             # no rows affected, do not need to delete entities
-            print(result.rowcount)
             if result.rowcount == 0:
                 return
 
